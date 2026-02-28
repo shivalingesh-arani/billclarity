@@ -163,7 +163,7 @@ function SectionCollapsible({
 function FlagCard({ flag }: { flag: Flag }) {
   const [expanded, setExpanded] = useState(false);
   const isNsa = isNsaFlag(flag.flag_type);
-  const isHigh = flag.confidence === "high";
+  const isHigh = flag.confidence?.toLowerCase() === "high";
 
   return (
     <div className="bg-white rounded-2xl shadow-sm overflow-hidden border border-slate-200">
@@ -389,12 +389,12 @@ export default function ResultsPage() {
 
         {/* 2. Summary card */}
         <div
-          className={`bg-white rounded-2xl shadow-md px-6 py-6 border-l-4 ${
+          className={`bg-white rounded-2xl shadow-md px-6 py-6 border-t-4 ${
             isClean
-              ? "border-emerald-500"
+              ? "border-emerald-400"
               : isInfoOnly
-              ? "border-slate-300"
-              : "border-amber-500"
+              ? "border-slate-200"
+              : "border-amber-400"
           }`}
         >
           <h2 className="text-xl font-semibold text-slate-800 mb-5 leading-snug">
@@ -431,11 +431,9 @@ export default function ResultsPage() {
           </div>
 
           {data.results_summary.recommend_human_review && (
-            <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-              <p className="text-xs text-amber-800 leading-relaxed">
-                This bill may benefit from a professional billing advocate. We&apos;ve noted where below.
-              </p>
-            </div>
+            <p className="mt-3 text-xs text-slate-400 italic">
+              This bill may benefit from a professional billing advocate. We&apos;ve noted where below.
+            </p>
           )}
         </div>
 
