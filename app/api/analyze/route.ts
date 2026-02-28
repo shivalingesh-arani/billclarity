@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { jsonrepair } from "jsonrepair";
+import sharp from "sharp";
 
 const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -150,13 +152,24 @@ export async function POST(req: NextRequest) {
     }
 
     const buffer = await file.arrayBuffer();
-    const base64 = Buffer.from(buffer).toString("base64");
 
-    // Determine media type for Claude
+    // Compress images before sending to Claude (5 MB API limit)
     type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
     type DocumentMediaType = "application/pdf";
 
     const isPdf = file.type === "application/pdf";
+    let base64: string;
+    const imageMediaType: ImageMediaType = "image/jpeg";
+
+    if (!isPdf) {
+      const compressed = await sharp(Buffer.from(buffer))
+        .resize({ width: 1800, withoutEnlargement: true })
+        .jpeg({ quality: 85 })
+        .toBuffer();
+      base64 = compressed.toString("base64");
+    } else {
+      base64 = Buffer.from(buffer).toString("base64");
+    }
 
     // CALL 1 — EXTRACTION
     let extractionContent: Anthropic.MessageParam["content"];
@@ -182,7 +195,7 @@ export async function POST(req: NextRequest) {
           type: "image",
           source: {
             type: "base64",
-            media_type: file.type as ImageMediaType,
+            media_type: imageMediaType,
             data: base64,
           },
         },
@@ -213,7 +226,7 @@ export async function POST(req: NextRequest) {
     // Parse extraction JSON
     let extractionJson: unknown;
     try {
-      extractionJson = JSON.parse(cleanJson(extractionText));
+      extractionJson = JSON.parse(jsonrepair(cleanJson(extractionText)));
     } catch {
       return NextResponse.json(
         { error: "We couldn't read your bill's data. Please try again." },
@@ -239,7 +252,7 @@ export async function POST(req: NextRequest) {
 
     let triageJson: unknown;
     try {
-      triageJson = JSON.parse(cleanJson(triageText));
+      triageJson = JSON.parse(jsonrepair(cleanJson(triageText)));
     } catch {
       return NextResponse.json(
         { error: "We couldn't complete the analysis. Please try again." },
