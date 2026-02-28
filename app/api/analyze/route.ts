@@ -112,6 +112,18 @@ Output format:
 
 Mandatory: results_summary before flags. Emotional opener on every output: Medical bills are confusing by design. Retaliation note on every flag: Disputing a billing error is not the same as filing a claim. Insurers cannot raise your premiums or drop your coverage. Educational note on every flag. State balance billing note in every triage_notes. Dispute payment guidance in every triage_notes. NSA savings always up to $X never exact. Call scripts end with: Can you please confirm that in writing? Never use: fraud, illegal, criminal, lawsuit, sue.`;
 
+function cleanJson(raw: string): string {
+  // Strip markdown code fences (```json ... ``` or ``` ... ```)
+  let cleaned = raw.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "");
+  // Strip anything before the first {
+  const start = cleaned.indexOf("{");
+  if (start > 0) cleaned = cleaned.slice(start);
+  // Strip anything after the last }
+  const end = cleaned.lastIndexOf("}");
+  if (end !== -1 && end < cleaned.length - 1) cleaned = cleaned.slice(0, end + 1);
+  return cleaned.trim();
+}
+
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
@@ -201,15 +213,12 @@ export async function POST(req: NextRequest) {
     // Parse extraction JSON
     let extractionJson: unknown;
     try {
-      extractionJson = JSON.parse(extractionText);
+      extractionJson = JSON.parse(cleanJson(extractionText));
     } catch {
-      // Try to extract JSON from the response if there's extra text
-      const jsonMatch = extractionText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        extractionJson = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error("Failed to parse extraction response as JSON.");
-      }
+      return NextResponse.json(
+        { error: "We couldn't read your bill's data. Please try again." },
+        { status: 500 }
+      );
     }
 
     // CALL 2 — TRIAGE
@@ -230,14 +239,12 @@ export async function POST(req: NextRequest) {
 
     let triageJson: unknown;
     try {
-      triageJson = JSON.parse(triageText);
+      triageJson = JSON.parse(cleanJson(triageText));
     } catch {
-      const jsonMatch = triageText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        triageJson = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error("Failed to parse triage response as JSON.");
-      }
+      return NextResponse.json(
+        { error: "We couldn't complete the analysis. Please try again." },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json(triageJson);
