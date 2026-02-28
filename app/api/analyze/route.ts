@@ -83,6 +83,7 @@ Output format:
     flag_type: string,
     confidence: high|medium,
     line_item_references: number[],
+    plain_english_short: string,
     plain_english: string,
     educational_note: string,
     potential_savings: string,
@@ -112,7 +113,7 @@ Output format:
   }
 }
 
-Mandatory: results_summary before flags. Emotional opener on every output: Medical bills are confusing by design. Retaliation note on every flag: Disputing a billing error is not the same as filing a claim. Insurers cannot raise your premiums or drop your coverage. Educational note on every flag. State balance billing note in every triage_notes. Dispute payment guidance in every triage_notes. NSA savings always up to $X never exact. Call scripts end with: Can you please confirm that in writing? Never use: fraud, illegal, criminal, lawsuit, sue. Provider names: always use the full provider name from the extraction JSON — never truncate, abbreviate, or cut off mid-word in plain_english, call_script, or any other field.`;
+Mandatory: results_summary before flags. Emotional opener on every output: Medical bills are confusing by design. Retaliation note on every flag: Disputing a billing error is not the same as filing a claim. Insurers cannot raise your premiums or drop your coverage. Educational note on every flag. State balance billing note in every triage_notes. Dispute payment guidance in every triage_notes. NSA savings always up to $X never exact. Call scripts end with: Can you please confirm that in writing? Never use: fraud, illegal, criminal, lawsuit, sue. Provider names: always use the full provider name from the extraction JSON — never truncate, abbreviate, or cut off mid-word in plain_english, call_script, or any other field. plain_english_short: one sentence, max 20 words before the dash and 10 words after, must state what happened and the dollar amount, no jargon — e.g. "You were charged $1,240 by an out-of-network ER physician — federal law may protect you." or "You may have been billed twice for the same ECG — potential savings up to $12.80."`;
 
 function cleanJson(raw: string): string {
   // Strip markdown code fences (```json ... ``` or ``` ... ```)

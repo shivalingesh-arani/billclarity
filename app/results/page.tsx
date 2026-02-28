@@ -18,6 +18,7 @@ interface Flag {
   flag_type: string;
   confidence: "high" | "medium";
   line_item_references: number[];
+  plain_english_short: string;
   plain_english: string;
   educational_note: string;
   potential_savings: string;
@@ -79,10 +80,6 @@ function humanizeFlagType(flagType: string): string {
     .join(" ");
 }
 
-function firstSentence(text: string): string {
-  const match = text.match(/^.+?[.!?](?:\s|$)/);
-  return match ? match[0].trim() : text.length > 120 ? text.slice(0, 120) + "…" : text;
-}
 
 function isNsaFlag(flagType: string): boolean {
   return flagType.startsWith("nsa_");
@@ -189,7 +186,7 @@ function FlagCard({ flag }: { flag: Flag }) {
 
         {/* Summary text */}
         <p className="text-slate-800 text-base leading-relaxed font-normal">
-          {expanded ? flag.plain_english : firstSentence(flag.plain_english)}
+          {flag.plain_english_short || flag.plain_english}
         </p>
 
         {/* Potential savings */}
@@ -220,6 +217,11 @@ function FlagCard({ flag }: { flag: Flag }) {
           <div className="border-t border-slate-100 mx-6" />
 
           <div className="px-6 pt-4 pb-1">
+            {/* Full plain english */}
+            <p className="text-slate-800 text-base leading-relaxed font-normal mb-4">
+              {flag.plain_english}
+            </p>
+
             {/* Educational note */}
             <p className="text-sm text-slate-600 leading-relaxed font-normal mb-4">
               {flag.educational_note}
