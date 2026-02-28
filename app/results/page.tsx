@@ -374,6 +374,8 @@ export default function ResultsPage() {
   const isClean = data.summary.result === "clean";
   const isInfoOnly = data.summary.result === "informational_only";
   const hasFlags = data.flags && data.flags.length > 0;
+  const highCount = data.flags?.filter(f => f.confidence?.toLowerCase() === "high").length ?? 0;
+  const mediumCount = data.flags?.filter(f => f.confidence?.toLowerCase() === "medium").length ?? 0;
 
   return (
     <main
@@ -411,8 +413,8 @@ export default function ResultsPage() {
               </p>
               {data.results_summary.total_flags > 0 && (
                 <p className="text-xs text-slate-400 mt-1">
-                  {data.results_summary.high_confidence_flags} high ·{" "}
-                  {data.results_summary.medium_confidence_flags} medium
+                  {highCount} high ·{" "}
+                  {mediumCount} medium
                 </p>
               )}
             </div>
