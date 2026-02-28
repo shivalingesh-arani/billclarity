@@ -166,29 +166,20 @@ function FlagCard({ flag }: { flag: Flag }) {
   const isHigh = flag.confidence === "high";
 
   return (
-    <div
-      className={`bg-white rounded-2xl shadow-sm overflow-hidden border-l-4 ${
-        isHigh ? "border-amber-400" : "border-slate-300"
-      }`}
-    >
+    <div className="bg-white rounded-2xl shadow-sm overflow-hidden border border-slate-200">
       {/* Always-visible header */}
       <div className="px-6 pt-5 pb-5">
-        {/* Confidence badge + human review tag */}
+        {/* Confidence badge */}
         <div className="flex items-center gap-2 mb-3">
           <span
-            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wide ${
+            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wide border ${
               isHigh
-                ? "bg-amber-500 text-white"
-                : "bg-slate-500 text-white"
+                ? "bg-amber-50 text-amber-700 border-amber-200"
+                : "bg-slate-50 text-slate-500 border-slate-200"
             }`}
           >
             {isHigh ? "Worth checking" : "May be worth checking"}
           </span>
-          {flag.requires_human_review && (
-            <span className="inline-flex items-center gap-1 text-xs text-slate-500 bg-slate-50 px-2 py-0.5 rounded-full border border-slate-200">
-              Consider getting help
-            </span>
-          )}
         </div>
 
         {/* Flag type label */}
@@ -204,7 +195,7 @@ function FlagCard({ flag }: { flag: Flag }) {
         {/* Potential savings */}
         <p className="mt-3 text-sm text-slate-500">
           Potential savings:{" "}
-          <span className="font-bold text-emerald-600">{flag.potential_savings}</span>
+          <span className="font-bold text-emerald-600 text-lg">{flag.potential_savings}</span>
         </p>
 
         {/* Primary CTA */}
@@ -300,9 +291,14 @@ function FlagCard({ flag }: { flag: Flag }) {
             </InlineCollapsible>
           </div>
 
-          {/* Retaliation note */}
+          {/* Human review + retaliation note */}
           <div className="px-6 pt-2 pb-5">
-            <div className="border-t border-slate-100 pt-3">
+            <div className="border-t border-slate-100 pt-3 space-y-2">
+              {flag.requires_human_review && (
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Complex cases like this may benefit from a billing advocate.
+                </p>
+              )}
               <p className="text-xs text-slate-400 italic leading-relaxed">
                 {flag.retaliation_note}
               </p>
@@ -382,11 +378,11 @@ export default function ResultsPage() {
       className="min-h-screen px-4 py-10 sm:py-14"
       style={{ backgroundColor: "#F8F7F5" }}
     >
-      <div className="max-w-lg mx-auto space-y-5">
+      <div className="max-w-lg mx-auto space-y-6">
 
         {/* 1. Banner */}
-        <div className="bg-green-50 rounded-2xl px-6 py-4 text-center">
-          <p className="text-green-800 text-base leading-relaxed font-normal">
+        <div className="bg-white rounded-2xl border-t-4 border-emerald-500 px-6 py-4 text-center shadow-sm">
+          <p className="text-slate-600 text-base leading-relaxed italic">
             Medical bills are confusing — that&apos;s not your fault. Here&apos;s what we found.
           </p>
         </div>
@@ -445,7 +441,7 @@ export default function ResultsPage() {
 
         {/* 3. Flag cards */}
         {hasFlags && (
-          <section className="space-y-4 pt-2">
+          <section className="space-y-6 pt-2">
             <p className="text-sm font-medium text-slate-500 px-1">
               {data.flags.length === 1
                 ? "1 item worth asking about"
