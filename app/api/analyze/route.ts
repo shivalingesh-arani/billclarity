@@ -56,15 +56,19 @@ const TRIAGE_SYSTEM_PROMPT = `You are BillClarity's billing triage engine. Recei
 
 Run these checks:
 CHECK 1 MATH: member_responsibility should equal sum of line_item patient_responsibility values within $1. If discrepancy > $1.00 → math_error flag. If math checks out → do NOT create a flag; instead add to triage_notes: "Math check: patient responsibility total matches line item sum — no discrepancy found."
-CHECK 2 OOP MAX: if oop_accumulated >= oop_max AND member_responsibility > 0 → oop_max_violation flag.
+CHECK 2 OOP PROXIMITY: If oop_accumulated is not null AND oop_max is not null AND oop_accumulated >= 0.9 x oop_max → generate exactly one oop_proximity flag, confidence always 'medium'. This check is binary — either the threshold is met or it is not. Do not skip this check. If oop_accumulated >= oop_max AND member_responsibility > 0 → generate oop_max_violation flag instead, confidence always 'high'.
 CHECK 3 DUPLICATES: same cpt_code + date_of_service + billing_provider on two lines → duplicate_charge flag. Skip if adjustment_reason_code contains corrected/MA130/N522 or if modifiers differ. For duplicate_charge flags, potential_savings = the patient_responsibility value of the duplicate line item (the second occurrence), formatted as "up to $X.XX". Never use amount_allowed for this calculation.
-CHECK 4 NSA EMERGENCY: place_of_service_code=23 AND in_network=false → one nsa_emergency_violation flag per unique billing_provider.
+CHECK 4 NSA EMERGENCY: For every line where place_of_service_code = '23' AND in_network = false, generate exactly one nsa_emergency_violation flag per unique billing_provider. No exceptions. Confidence is always 'high'. Do not group lines from different providers into one flag.
 CHECK 5 NSA ANCILLARY: confirm in-network anchor exists (any line with in_network=true at POS 21/22/23). Then each OON line where specialty contains anesthesia/radiology/pathology/laboratory/lab → one nsa_ancillary_violation flag per provider.
 CHECK 6 NSA AIR AMBULANCE: cpt_code in A0430/A0431/A0435/A0436 AND in_network=false → nsa_air_ambulance flag. Never flag ground ambulance.
 CHECK 7 WRONG POS: place_of_service_code in 21/22 AND description contains office visit or follow-up AND specialty is not radiology/pathology/anesthesia → possible_wrong_pos flag, medium confidence. Exceptions — do NOT flag as wrong_pos if: (A) the same line already has a coverage_denial flag (adjustment_reason_code contains CO-197 or prior-auth), coverage denial takes priority; or (B) description contains x-ray/radiology/imaging/CT/MRI/scan or billing_provider_specialty contains radiology, imaging at outpatient hospital settings is legitimate.
 CHECK 8 ZERO PAYMENT: zero_payment_flag=true. If adjustment contains prior-auth/CO-197 → coverage_denial flag with appeals deadline = denial date + 180 days. If adjustment contains deductible/copay → clean_item. If contains not covered → triage_note only. Otherwise → possible_processing_error flag.
 
 After all checks: if 2+ flags share line_item_references → add triage_note ordering by priority. If 3+ flags share same date and POS → add triage_note recommending insurer-first strategy.
+
+FLAG ORDER — always output flags in exactly this priority order, regardless of dollar amount: 1. coverage_denial 2. nsa_emergency_violation 3. nsa_ancillary_violation 4. nsa_air_ambulance 5. oop_max_violation or oop_proximity 6. duplicate_charge 7. math_error 8. possible_wrong_pos 9. possible_processing_error.
+
+CONFIDENCE RULES — always apply exactly: nsa_emergency_violation → 'high'. nsa_ancillary_violation → 'high'. nsa_air_ambulance → 'high'. coverage_denial → 'high'. duplicate_charge → 'high'. math_error → 'high'. oop_max_violation → 'high'. oop_proximity → 'medium'. possible_wrong_pos → 'medium'. possible_processing_error → 'medium'. Never deviate from these assignments.
 
 Output format:
 {
@@ -210,6 +214,7 @@ export async function POST(req: NextRequest) {
     const extractionResponse = await client.messages.create({
       model: "claude-sonnet-4-5",
       max_tokens: 4000,
+      temperature: 0,
       system: EXTRACTION_SYSTEM_PROMPT,
       messages: [
         {
@@ -236,14 +241,16 @@ export async function POST(req: NextRequest) {
     }
 
     // CALL 2 — TRIAGE
+    const requestId = crypto.randomUUID();
     const triageResponse = await client.messages.create({
       model: "claude-sonnet-4-5",
       max_tokens: 8000,
+      temperature: 0,
       system: TRIAGE_SYSTEM_PROMPT,
       messages: [
         {
           role: "user",
-          content: `Here is the extracted billing data:\n\n${JSON.stringify(extractionJson, null, 2)}`,
+          content: `Request ID: ${requestId}\n\nHere is the extracted billing data:\n\n${JSON.stringify(extractionJson, null, 2)}`,
         },
       ],
     });
