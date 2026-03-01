@@ -5,29 +5,29 @@ import { useRouter } from "next/navigation";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface NextSteps {
-  if_explanation_is_correct: string;
-  if_call_works: string;
-  if_provider_pushes_back: string;
-  if_no_response_30_days: string;
-  nsa_complaint_path: string | null;
+interface BillContext {
+  insurer_name: string | null;
+  patient_name: string | null;
+  primary_date_of_service: string | null;
 }
 
 interface Flag {
   flag_id: string;
   flag_type: string;
   confidence: "high" | "medium";
-  line_item_references: number[];
+  line_references: string[];
   plain_english_short: string;
   plain_english: string;
-  educational_note: string;
   potential_savings: string;
+  next_steps_summary: string;
+}
+
+interface FlagDetail {
   call_script: string;
   pushback_script: string;
-  collections_script: string | null;
+  next_steps: string[];
+  educational_note: string;
   retaliation_note: string;
-  next_steps: NextSteps;
-  requires_human_review: boolean;
 }
 
 interface CleanItem {
@@ -65,6 +65,7 @@ interface TriageResult {
   results_page_banner: string;
   results_summary: ResultsSummary;
   flags: Flag[];
+  bill_context: BillContext | null;
   clean_items: CleanItem[];
   clean_bill: CleanBill | null;
   triage_notes: string[];
@@ -78,10 +79,6 @@ function humanizeFlagType(flagType: string): string {
     .split("_")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
-}
-
-function isNsaFlag(flagType: string): boolean {
-  return (flagType ?? "").startsWith("nsa_");
 }
 
 // ── Inner collapsible (call scripts / next steps) ──────────────────────────
@@ -156,10 +153,37 @@ function SectionCollapsible({
 
 // ── Flag card ─────────────────────────────────────────────────────────────────
 
-function FlagCard({ flag }: { flag: Flag }) {
+function FlagCard({ flag, billContext }: { flag: Flag; billContext: BillContext | null }) {
   const [expanded, setExpanded] = useState(false);
-  const isNsa = isNsaFlag(flag.flag_type);
+  const [detail, setDetail] = useState<FlagDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
   const isHigh = flag.confidence?.toLowerCase() === "high";
+
+  const handleExpand = async () => {
+    const nowExpanded = !expanded;
+    setExpanded(nowExpanded);
+    if (nowExpanded && !detail && !detailLoading) {
+      setDetailLoading(true);
+      setDetailError(null);
+      try {
+        const res = await fetch("/api/flag-detail", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ flag, bill_context: billContext }),
+        });
+        if (!res.ok) throw new Error("Failed to load action plan.");
+        const json = await res.json();
+        if (json.error) throw new Error(json.error);
+        setDetail(json as FlagDetail);
+      } catch (err) {
+        setDetailError(err instanceof Error ? err.message : "Could not load action plan.");
+      } finally {
+        setDetailLoading(false);
+      }
+    }
+  };
 
   return (
     <div className="bg-white rounded-2xl shadow-sm overflow-hidden border border-slate-200">
@@ -197,7 +221,7 @@ function FlagCard({ flag }: { flag: Flag }) {
         {/* Primary CTA */}
         <div className="mt-4">
           <button
-            onClick={() => setExpanded((e) => !e)}
+            onClick={handleExpand}
             className={`w-full py-3 rounded-full font-medium text-sm transition-colors ${
               expanded
                 ? "border border-teal-600 text-teal-600 bg-white hover:bg-teal-50"
@@ -221,90 +245,77 @@ function FlagCard({ flag }: { flag: Flag }) {
               {flag.plain_english}
             </p>
 
-            {/* Educational note */}
-            <p className="text-sm text-slate-600 leading-relaxed font-normal mb-4">
-              {flag.educational_note}
-            </p>
-
-            <InlineCollapsible label="See call script">
-              <div className="font-mono text-sm text-slate-700 bg-slate-50 rounded-lg p-4 whitespace-pre-line">
-                {flag.call_script}
-              </div>
-            </InlineCollapsible>
-
-            <InlineCollapsible label="If they push back">
-              <div className="font-mono text-sm text-slate-700 bg-slate-50 rounded-lg p-4 whitespace-pre-line">
-                {flag.pushback_script}
-              </div>
-            </InlineCollapsible>
-
-            <InlineCollapsible label="Next steps">
-              <div className="space-y-4 text-sm leading-relaxed">
-                {flag.next_steps?.if_explanation_is_correct && (
-                  <div>
-                    <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">
-                      If the explanation is correct
-                    </p>
-                    <p className="text-slate-700">{flag.next_steps.if_explanation_is_correct}</p>
-                  </div>
-                )}
-                {flag.next_steps?.if_call_works && (
-                  <div>
-                    <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">
-                      If the call works
-                    </p>
-                    <p className="text-slate-700">{flag.next_steps.if_call_works}</p>
-                  </div>
-                )}
-                {flag.next_steps?.if_provider_pushes_back && (
-                  <div>
-                    <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">
-                      If the provider pushes back
-                    </p>
-                    <p className="text-slate-700">{flag.next_steps.if_provider_pushes_back}</p>
-                  </div>
-                )}
-                {flag.next_steps?.if_no_response_30_days && (
-                  <div>
-                    <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">
-                      If no response in 30 days
-                    </p>
-                    <p className="text-slate-700">{flag.next_steps.if_no_response_30_days}</p>
-                  </div>
-                )}
-                {flag.next_steps?.nsa_complaint_path && (
-                  <div>
-                    <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">
-                      Filing a complaint
-                    </p>
-                    <p className="text-slate-700">{flag.next_steps.nsa_complaint_path}</p>
-                  </div>
-                )}
-                {isNsa && flag.collections_script && (
-                  <div className="pt-2 border-t border-slate-100">
-                    <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">
-                      If this goes to collections (NSA disputes only)
-                    </p>
-                    <p className="text-slate-700">{flag.collections_script}</p>
-                  </div>
-                )}
-              </div>
-            </InlineCollapsible>
-          </div>
-
-          {/* Human review + retaliation note */}
-          <div className="px-6 pt-2 pb-5">
-            <div className="border-t border-slate-100 pt-3 space-y-2">
-              {flag.requires_human_review && (
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  Complex cases like this may benefit from a billing advocate.
-                </p>
-              )}
-              <p className="text-xs text-slate-400 italic leading-relaxed">
-                {flag.retaliation_note}
+            {/* Next steps summary — shown immediately */}
+            {flag.next_steps_summary && (
+              <p className="text-sm text-slate-600 leading-relaxed font-normal mb-4">
+                {flag.next_steps_summary}
               </p>
-            </div>
+            )}
+
+            {/* Loading skeleton */}
+            {detailLoading && (
+              <div className="animate-pulse space-y-3 py-2 pb-4">
+                <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">
+                  Preparing your action plan...
+                </p>
+                <div className="h-3 bg-slate-100 rounded w-3/4" />
+                <div className="h-3 bg-slate-100 rounded w-full" />
+                <div className="h-3 bg-slate-100 rounded w-5/6" />
+                <div className="h-3 bg-slate-100 rounded w-2/3" />
+              </div>
+            )}
+
+            {/* Error state */}
+            {detailError && (
+              <p className="text-sm text-slate-400 italic py-2 mb-2">{detailError}</p>
+            )}
+
+            {/* Detail content — shown after load */}
+            {detail && (
+              <>
+                <InlineCollapsible label="See call script">
+                  <div className="font-mono text-sm text-slate-700 bg-slate-50 rounded-lg p-4 whitespace-pre-line">
+                    {detail.call_script}
+                  </div>
+                </InlineCollapsible>
+
+                <InlineCollapsible label="If they push back">
+                  <div className="font-mono text-sm text-slate-700 bg-slate-50 rounded-lg p-4 whitespace-pre-line">
+                    {detail.pushback_script}
+                  </div>
+                </InlineCollapsible>
+
+                {detail.next_steps && detail.next_steps.length > 0 && (
+                  <InlineCollapsible label="Next steps">
+                    <ol className="space-y-2 text-sm text-slate-700 leading-relaxed list-decimal list-inside">
+                      {detail.next_steps.map((step, i) => (
+                        <li key={i}>{step}</li>
+                      ))}
+                    </ol>
+                  </InlineCollapsible>
+                )}
+
+                {detail.educational_note && (
+                  <InlineCollapsible label="Why this matters">
+                    <p className="text-sm text-slate-600 leading-relaxed">
+                      {detail.educational_note}
+                    </p>
+                  </InlineCollapsible>
+                )}
+              </>
+            )}
           </div>
+
+          {/* Retaliation note */}
+          {detail?.retaliation_note && (
+            <div className="px-6 pt-2 pb-5">
+              <div className="border-t border-slate-100 pt-3">
+                <p className="text-xs text-slate-400 italic leading-relaxed">
+                  {detail.retaliation_note}
+                </p>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
@@ -407,6 +418,7 @@ export default function ResultsPage() {
   const hasFlags = (data?.flags?.length ?? 0) > 0;
   const highCount = data?.flags?.filter(f => f.confidence?.toLowerCase() === "high").length ?? 0;
   const mediumCount = data?.flags?.filter(f => f.confidence?.toLowerCase() === "medium").length ?? 0;
+  const billContext = data.bill_context ?? null;
 
   return (
     <main
@@ -482,7 +494,7 @@ export default function ResultsPage() {
             </p>
             {data.flags?.map((flag, i) => (
               <FlagErrorBoundary key={flag.flag_id ?? i} flagId={flag.flag_id ?? String(i)} flagType={flag.flag_type ?? "unknown"}>
-                <FlagCard flag={flag} />
+                <FlagCard flag={flag} billContext={billContext} />
               </FlagErrorBoundary>
             ))}
           </section>
