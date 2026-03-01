@@ -86,24 +86,17 @@ Output format:
     flag_id: string,
     flag_type: string,
     confidence: high|medium,
-    line_item_references: number[],
+    line_references: string[],
     plain_english_short: string,
     plain_english: string,
-    educational_note: string,
     potential_savings: string,
-    call_script: string,
-    pushback_script: string,
-    collections_script: string|null,
-    retaliation_note: string,
-    next_steps: {
-      if_explanation_is_correct: string,
-      if_call_works: string,
-      if_provider_pushes_back: string,
-      if_no_response_30_days: string,
-      nsa_complaint_path: string|null
-    },
-    requires_human_review: boolean
+    next_steps_summary: string
   }],
+  bill_context: {
+    insurer_name: string|null,
+    patient_name: string|null,
+    primary_date_of_service: string|null
+  },
   clean_items: [{ line_number: number, reason: string }],
   clean_bill: { headline: string, line_reviews: array, what_we_checked: string[], caveat: string } | null,
   triage_notes: string[],
@@ -117,7 +110,7 @@ Output format:
   }
 }
 
-Mandatory: results_summary before flags. Emotional opener on every output: Medical bills are confusing by design. Retaliation note on every flag: Disputing a billing error is not the same as filing a claim. Insurers cannot raise your premiums or drop your coverage. Educational note on every flag. State balance billing note in every triage_notes. Dispute payment guidance in every triage_notes. NSA savings always up to $X never exact. Call scripts end with: Can you please confirm that in writing? Never use: fraud, illegal, criminal, lawsuit, sue. Provider names: always use the full provider name from the extraction JSON — never truncate, abbreviate, or cut off mid-word in plain_english, call_script, or any other field. plain_english_short: one sentence, max 20 words before the dash and 10 words after, must state what happened and the dollar amount, no jargon — e.g. "You were charged $1,240 by an out-of-network ER physician — federal law may protect you." or "You may have been billed twice for the same ECG — potential savings up to $12.80."
+Mandatory: results_summary before flags. Emotional opener on every output: Medical bills are confusing by design. State balance billing note in every triage_notes. Dispute payment guidance in every triage_notes. NSA savings always up to $X never exact. Never use: fraud, illegal, criminal, lawsuit, sue. Provider names: always use the full provider name from the extraction JSON — never truncate, abbreviate, or cut off mid-word. plain_english_short: one sentence, max 20 words before the dash and 10 words after, must state what happened and the dollar amount, no jargon. plain_english: 2-3 sentences max describing what happened and why it may be a problem. next_steps_summary: 1-2 sentences only — who to call first and what legal basis applies. bill_context: populate from the extraction JSON (insurer_name, patient_name, earliest date_of_service).
 
 CRITICAL — OOP PROXIMITY PLAIN ENGLISH SHORT: For oop_proximity flags, plain_english_short must always use this exact template with values substituted from the extraction JSON: "You're $[oop_max minus oop_accumulated] away from your $[oop_max] out-of-pocket maximum — future care may be fully covered." Calculate the remaining amount as oop_max minus oop_accumulated. Never use a percentage. Never say "you've reached X%". Always use the dollar amount remaining. Example: if oop_max=$6,000 and oop_accumulated=$5,840, write: "You're $160 away from your $6,000 out-of-pocket maximum — future care may be fully covered."
 
@@ -289,7 +282,7 @@ export async function POST(req: NextRequest) {
     console.log(`[BillClarity] Triage model selected: ${triageModel} — Reason: ${triageReason}`);
 
     // CALL 2 — TRIAGE
-    const triageMaxTokens = triageModel === "claude-sonnet-4-5" ? 4000 : 8000;
+    const triageMaxTokens = 4000; // slim schema — sufficient for any bill complexity
     const requestId = crypto.randomUUID();
     const triageResponse = await client.messages.create({
       model: triageModel,
