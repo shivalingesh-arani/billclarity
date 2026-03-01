@@ -314,6 +314,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Fallback: construct summary if missing from triage response
+    if (!triageJson.summary) {
+      const flags = Array.isArray(triageJson.flags) ? triageJson.flags as Record<string, unknown>[] : [];
+      triageJson.summary = {
+        result: flags.length > 0 ? "flags_found" : "clean",
+        total_flags: flags.length,
+        high_confidence_flags: flags.filter(f => String(f.confidence).toLowerCase() === "high").length,
+        medium_confidence_flags: flags.filter(f => String(f.confidence).toLowerCase() === "medium").length,
+        total_potential_savings: "unknown",
+        recommend_human_review: false,
+      };
+      console.warn("[BillClarity] summary field missing from triage response — fallback applied");
+    }
+
     // Inject debug metadata for results page
     triageJson._debug = { triage_model: triageModel, triage_reason: triageReason };
 

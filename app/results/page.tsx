@@ -371,11 +371,11 @@ export default function ResultsPage() {
     );
   }
 
-  const isClean = data.summary.result === "clean";
-  const isInfoOnly = data.summary.result === "informational_only";
-  const hasFlags = data.flags && data.flags.length > 0;
-  const highCount = data.flags?.filter(f => f.confidence?.toLowerCase() === "high").length ?? 0;
-  const mediumCount = data.flags?.filter(f => f.confidence?.toLowerCase() === "medium").length ?? 0;
+  const isClean = data?.summary?.result === "clean";
+  const isInfoOnly = data?.summary?.result === "informational_only";
+  const hasFlags = (data?.flags?.length ?? 0) > 0;
+  const highCount = data?.flags?.filter(f => f.confidence?.toLowerCase() === "high").length ?? 0;
+  const mediumCount = data?.flags?.filter(f => f.confidence?.toLowerCase() === "medium").length ?? 0;
 
   return (
     <main
@@ -402,16 +402,16 @@ export default function ResultsPage() {
           }`}
         >
           <h2 className="text-xl font-semibold text-slate-800 mb-5 leading-snug">
-            {data.results_summary.headline}
+            {data.results_summary?.headline}
           </h2>
 
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div className="bg-slate-50 rounded-xl p-4">
               <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Items to check</p>
               <p className="text-2xl font-bold text-slate-800">
-                {data.results_summary.total_flags}
+                {data.results_summary?.total_flags ?? 0}
               </p>
-              {data.results_summary.total_flags > 0 && (
+              {(data.results_summary?.total_flags ?? 0) > 0 && (
                 <p className="text-xs text-slate-400 mt-1">
                   {highCount} high ·{" "}
                   {mediumCount} medium
@@ -422,7 +422,7 @@ export default function ResultsPage() {
             <div className="bg-slate-50 rounded-xl p-4">
               <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Potential savings</p>
               <p className="text-3xl font-bold text-emerald-600">
-                {data.results_summary.total_potential_savings}
+                {data.results_summary?.total_potential_savings ?? "—"}
               </p>
             </div>
           </div>
@@ -430,11 +430,11 @@ export default function ResultsPage() {
           <div className="bg-slate-50 rounded-xl p-4">
             <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Where to start</p>
             <p className="text-sm text-slate-700 leading-relaxed font-normal">
-              {data.results_summary.recommended_first_action}
+              {data.results_summary?.recommended_first_action}
             </p>
           </div>
 
-          {data.results_summary.recommend_human_review && (
+          {data.results_summary?.recommend_human_review && (
             <p className="mt-3 text-xs text-slate-400 italic">
               This bill may benefit from a professional billing advocate. We&apos;ve noted where below.
             </p>
@@ -445,11 +445,11 @@ export default function ResultsPage() {
         {hasFlags && (
           <section className="space-y-6 pt-2">
             <p className="text-sm font-medium text-slate-500 px-1">
-              {data.flags.length === 1
+              {data.flags?.length === 1
                 ? "1 item worth asking about"
-                : `${data.flags.length} items worth asking about`}
+                : `${data.flags?.length} items worth asking about`}
             </p>
-            {data.flags.map((flag) => (
+            {data.flags?.map((flag) => (
               <FlagCard key={flag.flag_id} flag={flag} />
             ))}
           </section>
