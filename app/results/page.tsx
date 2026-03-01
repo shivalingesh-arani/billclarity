@@ -161,27 +161,24 @@ function FlagCard({ flag, billContext }: { flag: Flag; billContext: BillContext 
 
   const isHigh = flag.confidence?.toLowerCase() === "high";
 
-  const handleExpand = async () => {
-    const nowExpanded = !expanded;
-    setExpanded(nowExpanded);
-    if (nowExpanded && !detail && !detailLoading) {
-      setDetailLoading(true);
-      setDetailError(null);
-      try {
-        const res = await fetch("/api/flag-detail", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ flag, bill_context: billContext }),
-        });
-        if (!res.ok) throw new Error("Failed to load action plan.");
-        const json = await res.json();
-        if (json.error) throw new Error(json.error);
-        setDetail(json as FlagDetail);
-      } catch (err) {
-        setDetailError(err instanceof Error ? err.message : "Could not load action plan.");
-      } finally {
-        setDetailLoading(false);
-      }
+  const handleGetActionPlan = async () => {
+    if (detail || detailLoading) return;
+    setDetailLoading(true);
+    setDetailError(null);
+    try {
+      const res = await fetch("/api/flag-detail", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flag, bill_context: billContext }),
+      });
+      if (!res.ok) throw new Error("Failed to load action plan.");
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      setDetail(json as FlagDetail);
+    } catch (err) {
+      setDetailError(err instanceof Error ? err.message : "Could not load action plan.");
+    } finally {
+      setDetailLoading(false);
     }
   };
 
@@ -221,7 +218,7 @@ function FlagCard({ flag, billContext }: { flag: Flag; billContext: BillContext 
         {/* Primary CTA */}
         <div className="mt-4">
           <button
-            onClick={handleExpand}
+            onClick={() => setExpanded((e) => !e)}
             className={`w-full py-3 rounded-full font-medium text-sm transition-colors ${
               expanded
                 ? "border border-teal-600 text-teal-600 bg-white hover:bg-teal-50"
@@ -250,6 +247,16 @@ function FlagCard({ flag, billContext }: { flag: Flag; billContext: BillContext 
               <p className="text-sm text-slate-600 leading-relaxed font-normal mb-4">
                 {flag.next_steps_summary}
               </p>
+            )}
+
+            {/* Get action plan button — shown until detail loads */}
+            {!detail && !detailLoading && (
+              <button
+                onClick={handleGetActionPlan}
+                className="w-full py-2.5 rounded-full font-medium text-sm border border-teal-600 text-teal-600 bg-white hover:bg-teal-50 transition-colors mb-2"
+              >
+                Get my action plan
+              </button>
             )}
 
             {/* Loading skeleton */}
