@@ -244,10 +244,52 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // MODEL SELECTION — evaluate bill complexity from extraction output
+    type ExtractionLineItem = {
+      in_network: boolean | null;
+      adjustment_reason_code: string | null;
+    };
+    type ExtractionResult = {
+      extraction_confidence: string;
+      line_items: ExtractionLineItem[];
+    };
+    const extraction = extractionJson as ExtractionResult;
+    const lineItems: ExtractionLineItem[] = extraction.line_items ?? [];
+
+    const isHighConfidence = extraction.extraction_confidence === "high";
+    const isSimpleSize = lineItems.length <= 4;
+    const hasOON = lineItems.some((item) => item.in_network === false);
+    const hasPriorAuth = lineItems.some((item) => {
+      const code = (item.adjustment_reason_code ?? "").toLowerCase();
+      return code.includes("co-197") || code.includes("prior-auth") || code.includes("prior auth");
+    });
+
+    let triageModel: string;
+    let triageReason: string;
+
+    if (isHighConfidence && isSimpleSize && !hasOON && !hasPriorAuth) {
+      triageModel = "claude-haiku-4-5-20251001";
+      triageReason = "simple bill, high confidence";
+    } else if (hasOON) {
+      triageModel = "claude-sonnet-4-5";
+      triageReason = "OON providers detected";
+    } else if (!isHighConfidence) {
+      triageModel = "claude-sonnet-4-5";
+      triageReason = "low/medium extraction confidence";
+    } else if (hasPriorAuth) {
+      triageModel = "claude-sonnet-4-5";
+      triageReason = "prior auth denial detected";
+    } else {
+      triageModel = "claude-sonnet-4-5";
+      triageReason = "complex bill (5+ line items)";
+    }
+
+    console.log(`[BillClarity] Triage model selected: ${triageModel} — Reason: ${triageReason}`);
+
     // CALL 2 — TRIAGE
     const requestId = crypto.randomUUID();
     const triageResponse = await client.messages.create({
-      model: "claude-sonnet-4-5",
+      model: triageModel,
       max_tokens: 8000,
       temperature: 0,
       system: TRIAGE_SYSTEM_PROMPT,
@@ -262,7 +304,7 @@ export async function POST(req: NextRequest) {
     const triageText =
       triageResponse.content[0].type === "text" ? triageResponse.content[0].text : "";
 
-    let triageJson: unknown;
+    let triageJson: Record<string, unknown>;
     try {
       triageJson = JSON.parse(jsonrepair(cleanJson(triageText)));
     } catch {
@@ -271,6 +313,9 @@ export async function POST(req: NextRequest) {
         { status: 500 }
       );
     }
+
+    // Inject debug metadata for results page
+    triageJson._debug = { triage_model: triageModel, triage_reason: triageReason };
 
     return NextResponse.json(triageJson);
   } catch (err: unknown) {
