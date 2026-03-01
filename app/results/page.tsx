@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -74,15 +74,14 @@ interface TriageResult {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function humanizeFlagType(flagType: string): string {
-  return flagType
+  return (flagType ?? "")
     .split("_")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
 }
 
-
 function isNsaFlag(flagType: string): boolean {
-  return flagType.startsWith("nsa_");
+  return (flagType ?? "").startsWith("nsa_");
 }
 
 // ── Inner collapsible (call scripts / next steps) ──────────────────────────
@@ -241,7 +240,7 @@ function FlagCard({ flag }: { flag: Flag }) {
 
             <InlineCollapsible label="Next steps">
               <div className="space-y-4 text-sm leading-relaxed">
-                {flag.next_steps.if_explanation_is_correct && (
+                {flag.next_steps?.if_explanation_is_correct && (
                   <div>
                     <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">
                       If the explanation is correct
@@ -249,7 +248,7 @@ function FlagCard({ flag }: { flag: Flag }) {
                     <p className="text-slate-700">{flag.next_steps.if_explanation_is_correct}</p>
                   </div>
                 )}
-                {flag.next_steps.if_call_works && (
+                {flag.next_steps?.if_call_works && (
                   <div>
                     <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">
                       If the call works
@@ -257,7 +256,7 @@ function FlagCard({ flag }: { flag: Flag }) {
                     <p className="text-slate-700">{flag.next_steps.if_call_works}</p>
                   </div>
                 )}
-                {flag.next_steps.if_provider_pushes_back && (
+                {flag.next_steps?.if_provider_pushes_back && (
                   <div>
                     <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">
                       If the provider pushes back
@@ -265,7 +264,7 @@ function FlagCard({ flag }: { flag: Flag }) {
                     <p className="text-slate-700">{flag.next_steps.if_provider_pushes_back}</p>
                   </div>
                 )}
-                {flag.next_steps.if_no_response_30_days && (
+                {flag.next_steps?.if_no_response_30_days && (
                   <div>
                     <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">
                       If no response in 30 days
@@ -273,7 +272,7 @@ function FlagCard({ flag }: { flag: Flag }) {
                     <p className="text-slate-700">{flag.next_steps.if_no_response_30_days}</p>
                   </div>
                 )}
-                {flag.next_steps.nsa_complaint_path && (
+                {flag.next_steps?.nsa_complaint_path && (
                   <div>
                     <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">
                       Filing a complaint
@@ -312,6 +311,36 @@ function FlagCard({ flag }: { flag: Flag }) {
   );
 }
 
+// ── Flag error boundary ────────────────────────────────────────────────────────
+
+class FlagErrorBoundary extends React.Component<
+  { flagId: string; flagType: string; children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { flagId: string; flagType: string; children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(err: Error) {
+    console.error(`[BillClarity] FlagCard render error — flag_id: ${this.props.flagId}, flag_type: ${this.props.flagType}`, err);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 px-6 py-4">
+          <p className="text-sm text-slate-400 italic">
+            This item could not be displayed — please review your bill manually.
+          </p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ResultsPage() {
@@ -326,7 +355,9 @@ export default function ResultsPage() {
       return;
     }
     try {
-      setData(JSON.parse(raw));
+      const parsed = JSON.parse(raw);
+      console.log(`[BillClarity] Results loaded — flags: ${parsed.flags?.length ?? 0}`, parsed.flags?.map((f: Flag) => f.flag_type));
+      setData(parsed);
     } catch {
       setError("Failed to load results. Please try again.");
     }
@@ -449,8 +480,10 @@ export default function ResultsPage() {
                 ? "1 item worth asking about"
                 : `${data.flags?.length} items worth asking about`}
             </p>
-            {data.flags?.map((flag) => (
-              <FlagCard key={flag.flag_id} flag={flag} />
+            {data.flags?.map((flag, i) => (
+              <FlagErrorBoundary key={flag.flag_id ?? i} flagId={flag.flag_id ?? String(i)} flagType={flag.flag_type ?? "unknown"}>
+                <FlagCard flag={flag} />
+              </FlagErrorBoundary>
             ))}
           </section>
         )}
