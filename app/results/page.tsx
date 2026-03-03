@@ -274,7 +274,17 @@ function FlagCard({ flag, billContext }: { flag: Flag; billContext: BillContext 
 
             {/* Error state */}
             {detailError && (
-              <p className="text-sm text-slate-400 italic py-2 mb-2">{detailError}</p>
+              <div className="py-2 mb-2 space-y-3">
+                <p className="text-sm text-slate-500 leading-relaxed">
+                  We couldn&apos;t load your action plan right now — the service is busy. Please try again in a moment.
+                </p>
+                <button
+                  onClick={handleGetActionPlan}
+                  className="w-full py-2.5 rounded-full font-medium text-sm border border-teal-600 text-teal-600 bg-white hover:bg-teal-50 transition-colors"
+                >
+                  Try again
+                </button>
+              </div>
             )}
 
             {/* Detail content — shown after load */}
