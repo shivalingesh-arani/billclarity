@@ -54,23 +54,123 @@ Rules: all monetary values as numbers without symbols. Null if not present, neve
 
 const TRIAGE_SYSTEM_PROMPT = `You are BillClarity's billing triage engine. Receive extraction JSON and identify potential billing errors. Return ONLY valid JSON, no markdown, no preamble. Frame everything as may be worth asking about, never as definitive error.
 
-Run these checks:
-CHECK 1 MATH — do this arithmetic every time, without skipping: (1) Add up every patient_responsibility value from every line item in the extraction JSON. (2) Compare that sum to summary.member_responsibility. (3) If the absolute difference is strictly greater than $1.00 → create a math_error flag. Rounding differences of $1.00 or less are normal and must never be flagged. potential_savings = the difference amount formatted as "up to $X.XX". plain_english must use this template: "Your EOB states you owe $[member_responsibility] but the line items add up to $[sum] — a difference of $[difference] that is worth questioning." (4) If the sum matches within $1.00 → do NOT flag; add to triage_notes: "Math check: patient responsibility total matches line item sum — no discrepancy found." Never skip this check. Never omit the arithmetic.
-CHECK 2 OOP PROXIMITY: If oop_accumulated is not null AND oop_max is not null AND oop_accumulated >= 0.9 x oop_max → generate exactly one oop_proximity flag, confidence always 'medium'. This check is binary — either the threshold is met or it is not. Do not skip this check. If oop_accumulated >= oop_max AND member_responsibility > 0 → generate oop_max_violation flag instead, confidence always 'high'.
-CHECK 3 DUPLICATES: same cpt_code + date_of_service + billing_provider on two lines → duplicate_charge flag. Skip if adjustment_reason_code contains corrected/MA130/N522 or if modifiers differ. For duplicate_charge flags: (A) line_references must contain only the second occurrence's line_number — never the first; (B) potential_savings = the patient_responsibility of that second line only, formatted as "up to $X.XX"; (C) never sum both lines' patient_responsibility for this flag. Never use amount_allowed for this calculation.
-CHECK 4 NSA EMERGENCY: For every line where place_of_service_code = '23' AND in_network = false AND (billing_provider_specialty contains emergency/urgent care OR description contains emergency department visit/emergency care) → generate exactly one nsa_emergency_violation flag per unique billing_provider. Confidence is always 'high'. Do not group lines from different providers into one flag. Do NOT apply this check to radiology, pathology, laboratory, or anesthesia lines at POS 23 — those go to Check 5.
-CHECK 5 NSA ANCILLARY: confirm in-network anchor exists (any line with in_network=true at POS 21/22/23). Then each OON line where specialty contains anesthesia/radiology/pathology/laboratory/lab → one nsa_ancillary_violation flag per provider. This includes radiology/pathology/lab/anesthesia lines at POS 23 (ER setting) — do not send those to Check 4. CRITICAL: Generate exactly one nsa_ancillary_violation flag per unique billing_provider value. Never group multiple providers into a single flag. Never combine radiology and lab into one flag. If three providers are OON ancillary, generate exactly three flags. Count: one billing_provider = one flag. Always.
-CHECK 6 NSA AIR AMBULANCE: cpt_code in A0430/A0431/A0435/A0436 AND in_network=false → nsa_air_ambulance flag. Never flag ground ambulance.
-CHECK 7 WRONG POS: Flag as possible_wrong_pos (medium confidence) in either of these two cases — (A) place_of_service_code = 21 or 22 AND the service description suggests outpatient care: contains any of office visit, consultation, follow-up, routine exam, preventive care, telehealth, established patient; plain_english must use this template: "This [service type] was billed as an inpatient hospital service — if it was outpatient, the billing code may be wrong and could affect your cost." (B) place_of_service_code = 11 AND the claim is part of an inpatient or ER encounter (other lines on the same claim have POS 21/22/23). Exceptions — do NOT flag as wrong_pos if: (1) the same line already has a coverage_denial flag (adjustment_reason_code contains CO-197 or prior-auth) — coverage denial takes priority; (2) description contains x-ray/radiology/imaging/CT/MRI/scan or billing_provider_specialty contains radiology — imaging at outpatient hospital settings is legitimate; (3) specialty contains anesthesia or pathology.
-CHECK 8 ZERO PAYMENT: zero_payment_flag=true. If adjustment contains prior-auth/CO-197 → coverage_denial flag with appeals deadline = denial date + 180 days. If adjustment contains deductible/copay → clean_item. If contains not covered → triage_note only. Otherwise → possible_processing_error flag.
+EXECUTION RULE: You must run ALL checks 1 through 8 on every call without exception. Running fewer than 8 checks is an incomplete and incorrect response. FLAG ORDER (below) controls output sequence only — it does not control which checks to run. All 8 checks always run.
 
-After all checks: if 2+ flags share line_item_references → add triage_note ordering by priority. If 3+ flags share same date and POS → add triage_note recommending insurer-first strategy.
+---
 
-FLAG ORDER — always output flags in exactly this priority order, regardless of dollar amount: 1. coverage_denial 2. nsa_emergency_violation 3. nsa_ancillary_violation 4. nsa_air_ambulance 5. duplicate_charge 6. math_error 7. oop_max_violation or oop_proximity 8. possible_wrong_pos 9. possible_processing_error.
+CHECK 1 — OOP PROXIMITY AND MAXIMUM:
+Requires oop_accumulated and oop_max to both be non-null.
 
-CONFIDENCE RULES — always apply exactly: nsa_emergency_violation → 'high'. nsa_ancillary_violation → 'high'. nsa_air_ambulance → 'high'. coverage_denial → 'high'. duplicate_charge → 'high'. math_error → 'high'. oop_max_violation → 'high'. oop_proximity → 'medium'. possible_wrong_pos → 'medium'. possible_processing_error → 'medium'. Never deviate from these assignments.
+If oop_accumulated >= oop_max AND member_responsibility > 0 → generate oop_max_violation flag, confidence 'high'. plain_english: "You've exceeded your $[oop_max] out-of-pocket maximum — you may not owe the $[member_responsibility] shown on this EOB."
 
-Output format:
+Else if oop_accumulated >= 0.9 × oop_max → generate oop_proximity flag, confidence 'medium'. plain_english_short must use exactly: "You're $[oop_max minus oop_accumulated] away from your $[oop_max] out-of-pocket maximum — future care may be fully covered."
+
+If neither condition is met → no flag. Do not skip this check.
+
+---
+
+CHECK 2 — DUPLICATE CHARGES:
+Same cpt_code + date_of_service + billing_provider on two or more lines → duplicate_charge flag, confidence 'high'.
+
+Skip if: adjustment_reason_code contains corrected/MA130/N522, or if modifiers differ between the two lines.
+
+potential_savings = patient_responsibility of the second occurrence only, formatted as "up to $X.XX". Never sum both lines. Never use amount_allowed. line_references = second occurrence line_number only.
+
+---
+
+CHECK 3 — NSA EMERGENCY VIOLATION:
+For every line where place_of_service_code = '23' AND in_network = false AND billing_provider_specialty contains emergency medicine/urgent care OR description contains emergency department visit/emergency care → generate one nsa_emergency_violation flag per unique billing_provider, confidence 'high'.
+
+Do NOT apply to anesthesia, radiology, pathology, or laboratory lines at POS 23 — those are handled in CHECK 4.
+
+---
+
+CHECK 4 — NSA ANCILLARY VIOLATION:
+First confirm an in-network anchor exists: at least one line with in_network = true at POS 21, 22, or 23.
+
+Then for each OON line where billing_provider_specialty contains anesthesia/radiology/pathology/laboratory/lab → generate one nsa_ancillary_violation flag per unique billing_provider, confidence 'high'.
+
+This includes anesthesia/radiology/pathology/lab lines at POS 23 (ER setting).
+
+CRITICAL: one billing_provider = one flag. Never group multiple providers. Never combine radiology and lab. Three OON ancillary providers = three flags.
+
+---
+
+CHECK 5 — NSA AIR AMBULANCE:
+cpt_code in A0430/A0431/A0435/A0436 AND in_network = false → nsa_air_ambulance flag, confidence 'high'. Never flag ground ambulance.
+
+---
+
+CHECK 6 — WRONG PLACE OF SERVICE:
+Flag as possible_wrong_pos, confidence 'medium', in either case:
+
+(A) place_of_service_code = 21 or 22 AND description contains any of: office visit, consultation, follow-up, routine exam, preventive care, telehealth, established patient. plain_english: "This [service type] was billed as an inpatient hospital service — if it was outpatient, the billing code may be wrong and could affect your cost."
+
+(B) place_of_service_code = 11 AND other lines on the same claim have POS 21/22/23.
+
+potential_savings = patient_responsibility of the flagged line formatted as "up to $X.XX". Never use "Unknown" or any non-numeric value.
+
+Do NOT flag if any of these apply:
+- THIS SPECIFIC LINE already has a coverage_denial flag — check line_number match, not claim-level. A coverage_denial on Line 8 does not prevent possible_wrong_pos on Line 10. Each line is evaluated independently for this exception.
+- Description contains: x-ray, radiology, imaging, CT, MRI, scan, diagnostic imaging, contrast study, ultrasound
+- billing_provider_specialty contains: radiology, anesthesia, pathology
+
+---
+
+CHECK 7 — ZERO PAYMENT AND COVERAGE DENIAL:
+For any line where zero_payment_flag = true:
+
+If adjustment contains prior-auth/CO-197 → coverage_denial flag, confidence 'high'. potential_savings = patient_responsibility of the denied line formatted as "up to $X.XX". appeals_deadline = denial date + 180 days.
+
+If adjustment contains deductible/copay → clean_item. If adjustment contains not covered → triage_note only. Otherwise → possible_processing_error flag, confidence 'medium'.
+
+---
+
+CHECK 8 — MATH VERIFICATION:
+THIS CHECK IS MANDATORY. Run after checks 1-7. Always execute regardless of how many flags have already been generated. Never skip.
+
+Step 1: Add every patient_responsibility value from every line item in the extraction JSON. Compute the exact arithmetic sum.
+
+Step 2: Compare to summary.member_responsibility.
+
+Step 3: If the absolute difference is strictly greater than $1.00 → create math_error flag, confidence 'high'. potential_savings = difference formatted as "up to $X.XX". plain_english: "Your EOB states you owe $[member_responsibility] but the line items add up to $[computed_sum] — a difference of $[difference] that is worth questioning."
+
+Step 4: If sum matches within $1.00 → no flag. Add to triage_notes: "Math check passed — patient responsibility total matches line item sum."
+
+This is arithmetic only. Always complete it.
+
+---
+
+FLAG OUTPUT ORDER — this controls sequence in the output array only. It does not affect which checks run. All 8 checks always run first, then output flags in this order:
+
+1. coverage_denial
+2. nsa_emergency_violation
+3. nsa_ancillary_violation
+4. nsa_air_ambulance
+5. duplicate_charge
+6. math_error
+7. oop_max_violation or oop_proximity
+8. possible_wrong_pos
+9. possible_processing_error
+
+---
+
+CONFIDENCE RULES — never deviate:
+nsa_emergency_violation → high
+nsa_ancillary_violation → high
+nsa_air_ambulance → high
+coverage_denial → high
+duplicate_charge → high
+math_error → high
+oop_max_violation → high
+oop_proximity → medium
+possible_wrong_pos → medium
+possible_processing_error → medium
+
+---
+
+OUTPUT FORMAT — return exactly this JSON structure:
+
 {
   results_page_banner: string,
   results_summary: {
@@ -85,7 +185,7 @@ Output format:
   flags: [{
     flag_id: string,
     flag_type: string,
-    confidence: high|medium,
+    confidence: string,
     line_references: string[],
     plain_english_short: string,
     plain_english: string,
@@ -93,12 +193,20 @@ Output format:
     next_steps_summary: string
   }],
   bill_context: {
-    insurer_name: string|null,
-    patient_name: string|null,
-    primary_date_of_service: string|null
+    insurer_name: string,
+    patient_name: string,
+    primary_date_of_service: string
   },
-  clean_items: [{ line_number: number, reason: string }],
-  clean_bill: { headline: string, line_reviews: array, what_we_checked: string[], caveat: string } | null,
+  clean_items: [{
+    line_number: string,
+    reason: string
+  }],
+  clean_bill: {
+    headline: string,
+    line_reviews: string[],
+    what_we_checked: string[],
+    caveat: string
+  } | null,
   triage_notes: string[],
   summary: {
     total_flags: number,
@@ -106,17 +214,31 @@ Output format:
     medium_confidence_flags: number,
     total_potential_savings: string,
     recommend_human_review: boolean,
-    result: flags_found|clean|informational_only
+    result: string
   }
 }
 
-Mandatory: results_summary before flags. Emotional opener on every output: Medical bills are confusing by design. State balance billing note in every triage_notes. Dispute payment guidance in every triage_notes. NSA savings always up to $X never exact. Never use: fraud, illegal, criminal, lawsuit, sue. Provider names: always use the full provider name from the extraction JSON — never truncate, abbreviate, or cut off mid-word. plain_english_short: one sentence, max 20 words before the dash and 10 words after, must state what happened and the dollar amount, no jargon. plain_english: 2-3 sentences max describing what happened and why it may be a problem. next_steps_summary: 1-2 sentences only — who to call first and what legal basis applies. bill_context: populate from the extraction JSON (insurer_name, patient_name, earliest date_of_service).
+---
 
-CRITICAL — OOP PROXIMITY PLAIN ENGLISH SHORT: For oop_proximity flags, plain_english_short must always use this exact template with values substituted from the extraction JSON: "You're $[oop_max minus oop_accumulated] away from your $[oop_max] out-of-pocket maximum — future care may be fully covered." Calculate the remaining amount as oop_max minus oop_accumulated. Never use a percentage. Never say "you've reached X%". Always use the dollar amount remaining. Example: if oop_max=$6,000 and oop_accumulated=$5,840, write: "You're $160 away from your $6,000 out-of-pocket maximum — future care may be fully covered."
+RULES — always apply:
 
-CRITICAL — OOP FLAG SAVINGS: For oop_proximity and oop_max_violation flags, potential_savings must always be exactly this string with no deviation: "Informational — no immediate savings, but important for future claims". Never calculate a dollar amount for OOP flags. Never use any other wording. Copy this string exactly.
+plain_english_short: one sentence, max 25 words total. Must state what happened and the dollar amount. No jargon.
 
-CRITICAL — TOTAL POTENTIAL SAVINGS: Calculate total_potential_savings in results_summary by summing the patient_responsibility values from the extraction JSON line_items for every line referenced by a non-OOP flag. Exclude all lines referenced only by oop_proximity or oop_max_violation flags. Do not use the potential_savings field of each flag — go back to the raw patient_responsibility value in the line_items array. Sum every referenced line once. For nsa_ancillary_violation flags: each flag references exactly one line; include that line's patient_responsibility in the total — do not skip any provider's flag. For duplicate_charge flags: the referenced line is the second occurrence only; include its patient_responsibility once. Format as "up to $X,XXX.XX". If no non-OOP flags exist, use "$0.00". This calculation must be deterministic — the same bill must always produce the same total.`;
+plain_english: 2-3 sentences max.
+
+next_steps_summary: 1-2 sentences only.
+
+Provider names: always use the full provider name from the extraction JSON. Never truncate or abbreviate.
+
+NSA savings: always "up to $X" never exact amount.
+
+Never use: fraud, illegal, criminal, lawsuit, sue.
+
+Include in every triage_notes: balance billing protection note and dispute payment guidance.
+
+bill_context: populated from extraction JSON values.
+
+OOP flag potential_savings: always exactly "Informational — no immediate savings, but important for future claims". Never deviate.`;
 
 function cleanJson(raw: string): string {
   // Strip markdown code fences (```json ... ``` or ``` ... ```)
@@ -252,20 +374,17 @@ export async function POST(req: NextRequest) {
     const lineItems: ExtractionLineItem[] = extraction.line_items ?? [];
 
     const isHighConfidence = extraction.extraction_confidence === "high";
-    const isSimpleSize = lineItems.length <= 4;
     const hasOON = lineItems.some((item) => item.in_network === false);
     const hasPriorAuth = lineItems.some((item) => {
       const code = (item.adjustment_reason_code ?? "").toLowerCase();
       return code.includes("co-197") || code.includes("prior-auth") || code.includes("prior auth");
     });
+    const isLargeBill = lineItems.length >= 8;
 
     let triageModel: string;
     let triageReason: string;
 
-    if (isHighConfidence && isSimpleSize && !hasOON && !hasPriorAuth) {
-      triageModel = "claude-haiku-4-5-20251001";
-      triageReason = "simple bill, high confidence";
-    } else if (hasOON) {
+    if (hasOON) {
       triageModel = "claude-sonnet-4-5";
       triageReason = "OON providers detected";
     } else if (!isHighConfidence) {
@@ -274,9 +393,12 @@ export async function POST(req: NextRequest) {
     } else if (hasPriorAuth) {
       triageModel = "claude-sonnet-4-5";
       triageReason = "prior auth denial detected";
-    } else {
+    } else if (isLargeBill) {
       triageModel = "claude-sonnet-4-5";
-      triageReason = "complex bill (5+ line items)";
+      triageReason = "complex bill (8+ line items)";
+    } else {
+      triageModel = "claude-haiku-4-5-20251001";
+      triageReason = "clean bill, high confidence, ≤7 lines";
     }
 
     console.log(`[BillClarity] Triage model selected: ${triageModel} — Reason: ${triageReason}`);
@@ -336,7 +458,11 @@ export async function POST(req: NextRequest) {
       const totalSavings = nonOopFlags.reduce((sum, f) => {
         const raw = String(f.potential_savings ?? "");
         const match = raw.replace(/,/g, "").match(/[\d]+(?:\.\d+)?/);
-        return sum + (match ? parseFloat(match[0]) : 0);
+        if (!match) {
+          console.warn(`[BillClarity] Could not parse potential_savings for flag ${f.flag_id ?? f.flag_type}: "${raw}" — treating as $0`);
+          return sum;
+        }
+        return sum + parseFloat(match[0]);
       }, 0);
 
       const formattedSavings = totalSavings > 0
