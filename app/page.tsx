@@ -83,7 +83,11 @@ export default function UploadPage() {
       setLoading(false);
       setStepIndex(0);
       setError(
-        err instanceof Error ? err.message : "Something went wrong. Please try again."
+        err instanceof TypeError
+          ? "This took longer than expected — please check your connection and try again. A strong WiFi or 5G connection works best."
+          : err instanceof Error
+          ? err.message
+          : "Something went wrong. Please try again."
       );
     }
   }
@@ -101,7 +105,7 @@ export default function UploadPage() {
             Upload your medical bill or EOB
           </h1>
           <p className="text-slate-600 text-base leading-relaxed font-normal">
-            We&apos;ll check it for common billing errors in about 30 seconds.
+            We&apos;ll check it for common billing errors in 30–60 seconds.
           </p>
         </div>
 
