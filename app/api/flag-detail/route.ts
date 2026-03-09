@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
 import { jsonrepair } from "jsonrepair";
+import { anthropicClient } from "@/lib/anthropic";
+import { cleanJson } from "@/lib/clean-json";
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+const client = anthropicClient;
 
 const FLAG_DETAIL_SYSTEM_PROMPT = `You are a medical billing advocate. Generate detailed action guidance for a specific billing flag.
 
@@ -43,15 +42,6 @@ Output ONLY valid JSON, no markdown, no preamble:
 Never use: fraud, illegal, criminal, lawsuit, sue.
 Always end call_script with: "Can you please confirm that in writing?"
 Use the patient's name and insurer name from context where provided.`;
-
-function cleanJson(raw: string): string {
-  let cleaned = raw.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "");
-  const start = cleaned.indexOf("{");
-  if (start > 0) cleaned = cleaned.slice(start);
-  const end = cleaned.lastIndexOf("}");
-  if (end !== -1 && end < cleaned.length - 1) cleaned = cleaned.slice(0, end + 1);
-  return cleaned.trim();
-}
 
 export async function POST(req: NextRequest) {
   try {
