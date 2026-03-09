@@ -13,7 +13,16 @@ npm run typecheck  # TypeScript compiler check (tsc --noEmit)
 
 **Pre-commit hook** (Husky): runs `lint` and `typecheck` automatically before every commit. Do not skip with `--no-verify`.
 
-Requires `ANTHROPIC_API_KEY` in a `.env.local` file.
+Requires a `.env.local` file with the following variables:
+
+```
+ANTHROPIC_API_KEY=...
+
+# LangSmith tracing (optional — tracing is off when LANGSMITH_TRACING is unset or false)
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=...
+LANGSMITH_PROJECT=billclarity
+```
 
 ## Architecture
 
