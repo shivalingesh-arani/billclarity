@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { jsonrepair } from "jsonrepair";
 import sharp from "sharp";
+import { anthropicClient } from "@/lib/anthropic";
+import { cleanJson } from "@/lib/clean-json";
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+const client = anthropicClient;
 
 const EXTRACTION_SYSTEM_PROMPT = `You are a medical billing data extraction specialist. Extract structured data from the medical bill or EOB provided. Return ONLY valid JSON, no markdown, no preamble.
 
@@ -239,18 +239,6 @@ Include in every triage_notes: balance billing protection note and dispute payme
 bill_context: populated from extraction JSON values.
 
 OOP flag potential_savings: always exactly "Informational — no immediate savings, but important for future claims". Never deviate.`;
-
-function cleanJson(raw: string): string {
-  // Strip markdown code fences (```json ... ``` or ``` ... ```)
-  let cleaned = raw.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "");
-  // Strip anything before the first {
-  const start = cleaned.indexOf("{");
-  if (start > 0) cleaned = cleaned.slice(start);
-  // Strip anything after the last }
-  const end = cleaned.lastIndexOf("}");
-  if (end !== -1 && end < cleaned.length - 1) cleaned = cleaned.slice(0, end + 1);
-  return cleaned.trim();
-}
 
 export async function POST(req: NextRequest) {
   try {
