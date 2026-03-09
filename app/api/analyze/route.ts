@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { jsonrepair } from "jsonrepair";
 import sharp from "sharp";
+import { traceable } from "langsmith/traceable";
 import { anthropicClient } from "@/lib/anthropic";
 import { cleanJson } from "@/lib/clean-json";
 
@@ -240,6 +241,10 @@ bill_context: populated from extraction JSON values.
 
 OOP flag potential_savings: always exactly "Informational — no immediate savings, but important for future claims". Never deviate.`;
 
+type PipelineSuccess = { ok: true; data: Record<string, unknown> };
+type PipelineError = { ok: false; error: string; status: number };
+type PipelineResult = PipelineSuccess | PipelineError;
+
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
@@ -285,7 +290,7 @@ export async function POST(req: NextRequest) {
       base64 = Buffer.from(buffer).toString("base64");
     }
 
-    // CALL 1 — EXTRACTION
+    // Build extraction content outside the trace to keep base64 out of LangSmith inputs
     let extractionContent: Anthropic.MessageParam["content"];
 
     if (isPdf) {
@@ -320,160 +325,206 @@ export async function POST(req: NextRequest) {
       ];
     }
 
-    const extractionResponse = await client.messages.create({
-      model: "claude-sonnet-4-5",
-      max_tokens: 4000,
-      temperature: 0,
-      system: EXTRACTION_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: extractionContent,
-        },
-      ],
-    });
+    // Wrap both LLM calls in a single parent trace. file_type and file_size_kb are
+    // safe metadata — no base64 or patient data is passed as traceable inputs.
+    const runAnalysisPipeline = traceable(
+      async (): Promise<PipelineResult> => {
+        // CALL 1 — EXTRACTION
+        const extractionResponse = await client.messages.create({
+          model: "claude-sonnet-4-5",
+          max_tokens: 4000,
+          temperature: 0,
+          system: EXTRACTION_SYSTEM_PROMPT,
+          messages: [{ role: "user", content: extractionContent }],
+        });
 
-    const extractionText =
-      extractionResponse.content[0].type === "text"
-        ? extractionResponse.content[0].text
-        : "";
+        const extractionText =
+          extractionResponse.content[0].type === "text"
+            ? extractionResponse.content[0].text
+            : "";
 
-    // Parse extraction JSON
-    let extractionJson: unknown;
-    try {
-      extractionJson = JSON.parse(jsonrepair(cleanJson(extractionText)));
-    } catch {
-      return NextResponse.json(
-        { error: "We couldn't read your bill's data. Please try again." },
-        { status: 500 }
-      );
-    }
-
-    // MODEL SELECTION — evaluate bill complexity from extraction output
-    type ExtractionLineItem = {
-      in_network: boolean | null;
-      adjustment_reason_code: string | null;
-    };
-    type ExtractionResult = {
-      extraction_confidence: string;
-      line_items: ExtractionLineItem[];
-    };
-    const extraction = extractionJson as ExtractionResult;
-    const lineItems: ExtractionLineItem[] = extraction.line_items ?? [];
-
-    const isHighConfidence = extraction.extraction_confidence === "high";
-    const hasOON = lineItems.some((item) => item.in_network === false);
-    const hasPriorAuth = lineItems.some((item) => {
-      const code = (item.adjustment_reason_code ?? "").toLowerCase();
-      return code.includes("co-197") || code.includes("prior-auth") || code.includes("prior auth");
-    });
-    const isLargeBill = lineItems.length >= 8;
-
-    let triageModel: string;
-    let triageReason: string;
-
-    if (hasOON) {
-      triageModel = "claude-sonnet-4-5";
-      triageReason = "OON providers detected";
-    } else if (!isHighConfidence) {
-      triageModel = "claude-sonnet-4-5";
-      triageReason = "low/medium extraction confidence";
-    } else if (hasPriorAuth) {
-      triageModel = "claude-sonnet-4-5";
-      triageReason = "prior auth denial detected";
-    } else if (isLargeBill) {
-      triageModel = "claude-sonnet-4-5";
-      triageReason = "complex bill (8+ line items)";
-    } else {
-      triageModel = "claude-haiku-4-5-20251001";
-      triageReason = "clean bill, high confidence, ≤7 lines";
-    }
-
-    console.log(`[BillClarity] Triage model selected: ${triageModel} — Reason: ${triageReason}`);
-
-    // CALL 2 — TRIAGE
-    const triageMaxTokens = 4000; // slim schema — sufficient for any bill complexity
-    const requestId = crypto.randomUUID();
-    const triageResponse = await client.messages.create({
-      model: triageModel,
-      max_tokens: triageMaxTokens,
-      temperature: 0,
-      system: TRIAGE_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: `Request ID: ${requestId}\n\nHere is the extracted billing data:\n\n${JSON.stringify(extractionJson, null, 2)}`,
-        },
-      ],
-    });
-
-    const triageText =
-      triageResponse.content[0].type === "text" ? triageResponse.content[0].text : "";
-
-    let triageJson: Record<string, unknown>;
-    try {
-      triageJson = JSON.parse(jsonrepair(cleanJson(triageText)));
-    } catch {
-      return NextResponse.json(
-        { error: "We couldn't complete the analysis. Please try again." },
-        { status: 500 }
-      );
-    }
-
-    // Fallback: construct summary if missing from triage response
-    if (!triageJson.summary) {
-      const flags = Array.isArray(triageJson.flags) ? triageJson.flags as Record<string, unknown>[] : [];
-      triageJson.summary = {
-        result: flags.length > 0 ? "flags_found" : "clean",
-        total_flags: flags.length,
-        high_confidence_flags: flags.filter(f => String(f.confidence).toLowerCase() === "high").length,
-        medium_confidence_flags: flags.filter(f => String(f.confidence).toLowerCase() === "medium").length,
-        total_potential_savings: "unknown",
-        recommend_human_review: false,
-      };
-      console.warn("[BillClarity] summary field missing from triage response — fallback applied");
-    }
-
-    // Deterministic post-processing — override model-generated counts and savings totals
-    {
-      type FlagRecord = Record<string, unknown>;
-      const OOP_TYPES = new Set(["oop_proximity", "oop_max_violation"]);
-      const flags = Array.isArray(triageJson.flags) ? triageJson.flags as FlagRecord[] : [];
-      const flagCount = flags.length;
-      const nonOopFlags = flags.filter(f => !OOP_TYPES.has(String(f.flag_type)));
-
-      // Parse "up to $1,260.00" → 1260.00; skip OOP flags and unparseable values
-      const totalSavings = nonOopFlags.reduce((sum, f) => {
-        const raw = String(f.potential_savings ?? "");
-        const match = raw.replace(/,/g, "").match(/[\d]+(?:\.\d+)?/);
-        if (!match) {
-          console.warn(`[BillClarity] Could not parse potential_savings for flag ${f.flag_id ?? f.flag_type}: "${raw}" — treating as $0`);
-          return sum;
+        let extractionJson: unknown;
+        try {
+          extractionJson = JSON.parse(jsonrepair(cleanJson(extractionText)));
+        } catch {
+          return {
+            ok: false,
+            error: "We couldn't read your bill's data. Please try again.",
+            status: 500,
+          };
         }
-        return sum + parseFloat(match[0]);
-      }, 0);
 
-      const formattedSavings = totalSavings > 0
-        ? `up to $${totalSavings.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        : "$0.00";
+        // MODEL SELECTION — evaluate bill complexity from extraction output
+        type ExtractionLineItem = {
+          in_network: boolean | null;
+          adjustment_reason_code: string | null;
+        };
+        type ExtractionResult = {
+          extraction_confidence: string;
+          line_items: ExtractionLineItem[];
+        };
+        const extraction = extractionJson as ExtractionResult;
+        const lineItems: ExtractionLineItem[] = extraction.line_items ?? [];
 
-      // Overwrite both locations where these values appear
-      const rs = triageJson.results_summary as Record<string, unknown> | undefined;
-      if (rs) {
-        rs.total_flags = flagCount;
-        rs.total_potential_savings = formattedSavings;
+        const isHighConfidence = extraction.extraction_confidence === "high";
+        const hasOON = lineItems.some((item) => item.in_network === false);
+        const hasPriorAuth = lineItems.some((item) => {
+          const code = (item.adjustment_reason_code ?? "").toLowerCase();
+          return (
+            code.includes("co-197") ||
+            code.includes("prior-auth") ||
+            code.includes("prior auth")
+          );
+        });
+        const isLargeBill = lineItems.length >= 8;
+
+        let triageModel: string;
+        let triageReason: string;
+
+        if (hasOON) {
+          triageModel = "claude-sonnet-4-5";
+          triageReason = "OON providers detected";
+        } else if (!isHighConfidence) {
+          triageModel = "claude-sonnet-4-5";
+          triageReason = "low/medium extraction confidence";
+        } else if (hasPriorAuth) {
+          triageModel = "claude-sonnet-4-5";
+          triageReason = "prior auth denial detected";
+        } else if (isLargeBill) {
+          triageModel = "claude-sonnet-4-5";
+          triageReason = "complex bill (8+ line items)";
+        } else {
+          triageModel = "claude-haiku-4-5-20251001";
+          triageReason = "clean bill, high confidence, ≤7 lines";
+        }
+
+        console.log(
+          `[BillClarity] Triage model selected: ${triageModel} — Reason: ${triageReason}`
+        );
+
+        // CALL 2 — TRIAGE
+        const requestId = crypto.randomUUID();
+        const triageResponse = await client.messages.create({
+          model: triageModel,
+          max_tokens: 4000, // slim schema — sufficient for any bill complexity
+          temperature: 0,
+          system: TRIAGE_SYSTEM_PROMPT,
+          messages: [
+            {
+              role: "user",
+              content: `Request ID: ${requestId}\n\nHere is the extracted billing data:\n\n${JSON.stringify(extractionJson, null, 2)}`,
+            },
+          ],
+        });
+
+        const triageText =
+          triageResponse.content[0].type === "text"
+            ? triageResponse.content[0].text
+            : "";
+
+        let triageJson: Record<string, unknown>;
+        try {
+          triageJson = JSON.parse(jsonrepair(cleanJson(triageText)));
+        } catch {
+          return {
+            ok: false,
+            error: "We couldn't complete the analysis. Please try again.",
+            status: 500,
+          };
+        }
+
+        // Fallback: construct summary if missing from triage response
+        if (!triageJson.summary) {
+          const flags = Array.isArray(triageJson.flags)
+            ? (triageJson.flags as Record<string, unknown>[])
+            : [];
+          triageJson.summary = {
+            result: flags.length > 0 ? "flags_found" : "clean",
+            total_flags: flags.length,
+            high_confidence_flags: flags.filter(
+              (f) => String(f.confidence).toLowerCase() === "high"
+            ).length,
+            medium_confidence_flags: flags.filter(
+              (f) => String(f.confidence).toLowerCase() === "medium"
+            ).length,
+            total_potential_savings: "unknown",
+            recommend_human_review: false,
+          };
+          console.warn(
+            "[BillClarity] summary field missing from triage response — fallback applied"
+          );
+        }
+
+        // Deterministic post-processing — override model-generated counts and savings totals
+        {
+          type FlagRecord = Record<string, unknown>;
+          const OOP_TYPES = new Set(["oop_proximity", "oop_max_violation"]);
+          const flags = Array.isArray(triageJson.flags)
+            ? (triageJson.flags as FlagRecord[])
+            : [];
+          const flagCount = flags.length;
+          const nonOopFlags = flags.filter(
+            (f) => !OOP_TYPES.has(String(f.flag_type))
+          );
+
+          // Parse "up to $1,260.00" → 1260.00; skip OOP flags and unparseable values
+          const totalSavings = nonOopFlags.reduce((sum, f) => {
+            const raw = String(f.potential_savings ?? "");
+            const match = raw.replace(/,/g, "").match(/[\d]+(?:\.\d+)?/);
+            if (!match) {
+              console.warn(
+                `[BillClarity] Could not parse potential_savings for flag ${f.flag_id ?? f.flag_type}: "${raw}" — treating as $0`
+              );
+              return sum;
+            }
+            return sum + parseFloat(match[0]);
+          }, 0);
+
+          const formattedSavings =
+            totalSavings > 0
+              ? `up to $${totalSavings.toLocaleString("en-US", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}`
+              : "$0.00";
+
+          // Overwrite both locations where these values appear
+          const rs = triageJson.results_summary as
+            | Record<string, unknown>
+            | undefined;
+          if (rs) {
+            rs.total_flags = flagCount;
+            rs.total_potential_savings = formattedSavings;
+          }
+          const sm = triageJson.summary as Record<string, unknown>;
+          sm.total_flags = flagCount;
+          sm.total_potential_savings = formattedSavings;
+
+          console.log(
+            `[BillClarity] Post-processed totals — flags: ${flagCount}, savings: ${formattedSavings}`
+          );
+        }
+
+        // Inject debug metadata for results page
+        triageJson._debug = { triage_model: triageModel, triage_reason: triageReason };
+
+        return { ok: true, data: triageJson };
+      },
+      {
+        name: "bill-analysis",
+        run_type: "chain",
+        metadata: {
+          file_type: file.type,
+          file_size_kb: Math.round(file.size / 1024),
+        },
       }
-      const sm = triageJson.summary as Record<string, unknown>;
-      sm.total_flags = flagCount;
-      sm.total_potential_savings = formattedSavings;
+    );
 
-      console.log(`[BillClarity] Post-processed totals — flags: ${flagCount}, savings: ${formattedSavings}`);
+    const result = await runAnalysisPipeline();
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: result.status });
     }
-
-    // Inject debug metadata for results page
-    triageJson._debug = { triage_model: triageModel, triage_reason: triageReason };
-
-    return NextResponse.json(triageJson);
+    return NextResponse.json(result.data);
   } catch (err: unknown) {
     console.error("BillClarity API error:", err);
     const message =

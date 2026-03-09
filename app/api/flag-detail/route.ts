@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jsonrepair } from "jsonrepair";
+import { traceable } from "langsmith/traceable";
 import { anthropicClient } from "@/lib/anthropic";
 import { cleanJson } from "@/lib/clean-json";
 
@@ -68,26 +69,33 @@ Bill Context:
 
 Generate detailed action guidance for this billing flag.`;
 
-    const response = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 1500,
-      temperature: 0.3,
-      system: FLAG_DETAIL_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userContent }],
-    });
+    const runFlagDetail = traceable(
+      async (): Promise<unknown> => {
+        const response = await client.messages.create({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 1500,
+          temperature: 0.3,
+          system: FLAG_DETAIL_SYSTEM_PROMPT,
+          messages: [{ role: "user", content: userContent }],
+        });
 
-    const text = response.content[0].type === "text" ? response.content[0].text : "";
+        const text =
+          response.content[0].type === "text" ? response.content[0].text : "";
 
-    let detail: unknown;
-    try {
-      detail = JSON.parse(jsonrepair(cleanJson(text)));
-    } catch {
-      return NextResponse.json(
-        { error: "We couldn't generate the action plan. Please try again." },
-        { status: 500 }
-      );
-    }
+        try {
+          return JSON.parse(jsonrepair(cleanJson(text)));
+        } catch {
+          throw new Error("We couldn't generate the action plan. Please try again.");
+        }
+      },
+      {
+        name: "flag-detail",
+        run_type: "chain",
+        metadata: { flag_type: flag.flag_type },
+      }
+    );
 
+    const detail = await runFlagDetail();
     console.log(`[BillClarity] Flag detail complete: ${flag.flag_type}`);
     return NextResponse.json(detail);
   } catch (err: unknown) {
